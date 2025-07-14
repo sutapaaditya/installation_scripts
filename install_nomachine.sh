@@ -74,8 +74,8 @@ esac
 print_status "Detected architecture: $ARCH (using $NOMACHINE_ARCH package)"
 
 # NoMachine download URL (latest version)
-NOMACHINE_VERSION="8.13.1_1"
-NOMACHINE_URL="https://download.nomachine.com/download/${NOMACHINE_VERSION}/Linux/nomachine_${NOMACHINE_VERSION}_${NOMACHINE_ARCH}.deb"
+NOMACHINE_VERSION="9.0.188_11"
+NOMACHINE_URL="https://download.nomachine.com/download/9.0/Linux/nomachine_${NOMACHINE_VERSION}_${NOMACHINE_ARCH}.deb"
 NOMACHINE_FILE="nomachine_${NOMACHINE_VERSION}_${NOMACHINE_ARCH}.deb"
 
 # Create temporary directory
@@ -85,8 +85,16 @@ cd "$TEMP_DIR"
 print_status "Downloading NoMachine from: $NOMACHINE_URL"
 
 # Download NoMachine
-if ! wget -O "$NOMACHINE_FILE" "$NOMACHINE_URL"; then
+print_status "Downloading NoMachine..."
+if ! wget --progress=bar:force -O "$NOMACHINE_FILE" "$NOMACHINE_URL"; then
     print_error "Failed to download NoMachine. Please check your internet connection."
+    exit 1
+fi
+
+# Verify download is a valid .deb file
+if ! file "$NOMACHINE_FILE" | grep -q "Debian binary package"; then
+    print_error "Downloaded file is not a valid Debian package. URL may be incorrect."
+    print_error "Downloaded file type: $(file "$NOMACHINE_FILE")"
     exit 1
 fi
 
@@ -115,17 +123,49 @@ rm -rf "$TEMP_DIR"
 print_status "Cleaning up temporary files..."
 
 # Check if NoMachine service is running
-if systemctl is-active --quiet nxserver; then
-    print_status "NoMachine service is running"
+print_status "Checking NoMachine service..."
+if systemctl list-units --full -all | grep -q "nxserver.service"; then
+    if systemctl is-active --quiet nxserver; then
+        print_status "NoMachine service is already running"
+    else
+        print_status "Starting NoMachine service..."
+        sudo systemctl start nxserver
+        sudo systemctl enable nxserver
+    fi
 else
-    print_status "Starting NoMachine service..."
-    sudo systemctl start nxserver
-    sudo systemctl enable nxserver
+    # Try alternative service names
+    if systemctl list-units --full -all | grep -q "nomachine.service"; then
+        print_status "Starting NoMachine service (nomachine.service)..."
+        sudo systemctl start nomachine
+        sudo systemctl enable nomachine
+    elif [ -f "/etc/init.d/nxserver" ]; then
+        print_status "Starting NoMachine service via init.d..."
+        sudo service nxserver start
+        sudo update-rc.d nxserver defaults
+    else
+        print_warning "NoMachine service not found. Trying to start manually..."
+        if [ -f "/usr/NX/bin/nxserver" ]; then
+            sudo /usr/NX/bin/nxserver --startup
+        fi
+    fi
 fi
 
 # Display service status
-print_status "NoMachine service status:"
-systemctl status nxserver --no-pager -l
+print_status "Checking NoMachine service status..."
+if systemctl list-units --full -all | grep -q "nxserver.service"; then
+    systemctl status nxserver --no-pager -l
+elif systemctl list-units --full -all | grep -q "nomachine.service"; then
+    systemctl status nomachine --no-pager -l
+elif [ -f "/etc/init.d/nxserver" ]; then
+    service nxserver status
+else
+    print_status "Checking if NoMachine is running..."
+    if pgrep -x "nxd" > /dev/null; then
+        print_status "NoMachine daemon is running"
+    else
+        print_warning "NoMachine daemon may not be running"
+    fi
+fi
 
 # Get IP address for connection info
 IP_ADDRESS=$(hostname -I | awk '{print $1}')
